@@ -1,0 +1,80 @@
+{-# STDLIB_VERSION 5 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+
+let btcPathContracts = [Address(base58'3PACj2DLTw3uUhsUmT98zHU5M4hPufbHKav'), Address(base58'3PHaNgomBkrvEL2QnuJarQVJa71wjw9qiqG')]
+let btcPathTokens = [base58'8LQW8f7P5d5PZM7GtZEBgaqRPGSzS3DfPuiXrURJ4AJS', base58'DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p', unit]
+
+let usdtPathContracts = [Address(base58'3PPH7x7iqobW5ziyiRCic19rQqKr6nPYaK1'), Address(base58'3PHaNgomBkrvEL2QnuJarQVJa71wjw9qiqG')]
+let usdtPathTokens = [base58'34N9YcEETLWn93qYQ64EsP1x89tSruJU44RrEMSXXEPJ', base58'DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p', unit]
+
+let ethPathContracts = [Address(base58'3PNEC4YKqZiMMytFrYRVtpW2ujvi3aGXRPm'), Address(base58'3PHaNgomBkrvEL2QnuJarQVJa71wjw9qiqG')]
+let ethPathTokens = [base58'474jTeYx2r2Va35794tCScAXWJG9hU2HcgxzMowaZUnu', base58'DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p', unit]
+
+let ducksAuctionContract = Address(base58'3PEBtiSVLrqyYxGd76vXKu8FFWWsD1c5uYG')
+
+
+func getPath(assetId: ByteVector) = {
+  if (assetId == base58'8LQW8f7P5d5PZM7GtZEBgaqRPGSzS3DfPuiXrURJ4AJS') then { (btcPathContracts, btcPathTokens) }
+  else if (assetId == base58'34N9YcEETLWn93qYQ64EsP1x89tSruJU44RrEMSXXEPJ') then { (usdtPathContracts, usdtPathTokens) }
+  else if (assetId == base58'474jTeYx2r2Va35794tCScAXWJG9hU2HcgxzMowaZUnu') then { (ethPathContracts, ethPathTokens) }
+  else { throw("incorrect asset attached to payment") }
+}
+
+func getBalance(assetId: ByteVector|Unit) = {
+  match assetId {
+    case x: Unit => wavesBalance(this).available
+    case _ => assetBalance(this, assetId.value())
+  }
+}
+
+
+@Callable(i)
+func buyWaves(auctionId: String) = {
+  
+  func getInvocationArgs(contractAddress: Address) = {
+    let contractVersion = getString(contractAddress, "version")
+    if (contractVersion == "1.0.0") then { [1] } else { [1,1] }
+  }
+
+  let pmt = i.payments[0]
+
+  let asset1Amount = pmt.amount
+  let assetId = pmt.assetId.value()
+
+  let (pathContracts, pathAssets) = getPath(assetId)
+
+
+  strict balance2Before = getBalance(pathAssets[1])
+  let contractVersion = getString(pathContracts[0], "version")
+  let args = if (contractVersion == "1.0.0") then { [1] } else { [fraction(asset1Amount, 11000, 10000),asset1Amount] }
+  strict i1 = invoke(pathContracts[0],"exchange",args,[AttachedPayment(pathAssets[0], asset1Amount)]) 
+  strict balance2After = getBalance(pathAssets[1])
+  
+
+  let asset2Amount = balance2After - balance2Before
+
+
+  strict balance3Before = getBalance(pathAssets[2])
+  let contract2Version = getString(pathContracts[1], "version")
+  let args2 = if (contract2Version == "1.0.0") then { [1] } else { [fraction(asset2Amount, 11000, 10000),asset2Amount] }
+  strict i2 = invoke(pathContracts[1],"exchange",args2,[AttachedPayment(pathAssets[1], asset2Amount)]) 
+  strict balance3After = getBalance(pathAssets[2])
+
+
+  let asset3Amount = balance3After - balance3Before
+
+  if (auctionId == "") then {
+    [
+      ScriptTransfer(i.caller, asset3Amount, pathAssets[2])
+    ]
+  } else {
+    strict i3 = invoke(ducksAuctionContract,"placeBid",[auctionId],[AttachedPayment(pathAssets[2], asset3Amount)]) 
+    []
+  }
+}
+
+
+@Verifier(tx)
+func verify() = sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+        
